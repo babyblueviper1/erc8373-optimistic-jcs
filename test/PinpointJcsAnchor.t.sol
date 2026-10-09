@@ -22,6 +22,8 @@ library JcsTraceHarness {
 contract PinpointJcsAnchorTest is Test {
     uint256 constant WINDOW = 1 days;
     uint256 constant BOND = 0.01 ether;
+    // pq_key_binding.v1/canonicalization size cap: hex(ML-DSA-87 pk, 2592 B) = 5184 + 1024 for every other member = 6208
+    uint256 constant SIZE_CAP = 6208;
     PinpointJcsAnchor pa; // MAX_SEG 256, the deployment the gas numbers are for
     PinpointJcsAnchor tiny; // MAX_SEG 32, so even the short vectors split into many segments
     OptimisticJcsAnchor oa;
@@ -32,8 +34,8 @@ contract PinpointJcsAnchorTest is Test {
     address bob = address(0xB0B);
 
     function setUp() public {
-        pa = new PinpointJcsAnchor(WINDOW, BOND, 256);
-        tiny = new PinpointJcsAnchor(WINDOW, BOND, 32);
+        pa = new PinpointJcsAnchor(WINDOW, BOND, 256, SIZE_CAP);
+        tiny = new PinpointJcsAnchor(WINDOW, BOND, 32, SIZE_CAP);
         oa = new OptimisticJcsAnchor(WINDOW, BOND);
         h = new ProfileHarness();
         string memory json = vm.readFile("vectors.json");
@@ -310,5 +312,30 @@ contract PinpointJcsAnchorTest is Test {
         for (uint256 i; i < s.length; i++) {
             g += s[i] == 0 ? 4 : 16;
         }
+    }
+
+    /// Size cap is an admission rule: exactly SIZE_CAP anchors, SIZE_CAP + 1 is refused before anything is stored.
+    function test_sizeCapIsEnforcedAtAdmission() public {
+        bytes memory ok = _paddedStatement(SIZE_CAP);
+        bytes memory over = _paddedStatement(SIZE_CAP + 1);
+        assertEq(ok.length, SIZE_CAP);
+        assertEq(over.length, SIZE_CAP + 1);
+        vm.deal(address(this), 1 ether);
+        (bool okOk, uint256[] memory tOk) = pa.traceOf(ok);
+        assertTrue(okOk, "padded statement is canonical");
+        pa.anchor{value: BOND}(ok, tOk);
+        (, uint256[] memory t) = pa.traceOf(over);
+        vm.expectRevert(PinpointJcsAnchor.TooLarge.selector);
+        pa.anchor{value: BOND}(over, t);
+    }
+
+    /// A canonical one-member statement {"p":"xxxx..."} of exactly n bytes.
+    function _paddedStatement(uint256 n) internal pure returns (bytes memory out) {
+        out = new bytes(n);
+        bytes memory head = bytes('{"p":"');
+        for (uint256 i; i < head.length; i++) out[i] = head[i];
+        for (uint256 i = head.length; i < n - 2; i++) out[i] = "a";
+        out[n - 2] = '"';
+        out[n - 1] = "}";
     }
 }

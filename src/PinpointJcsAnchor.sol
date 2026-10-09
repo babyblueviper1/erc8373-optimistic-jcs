@@ -18,6 +18,9 @@ contract PinpointJcsAnchor {
     uint256 public immutable WINDOW;
     uint256 public immutable BOND;
     uint256 public immutable MAX_SEG; // bytes per segment
+    /// Profile size cap (pq_key_binding.v1/canonicalization): a statement longer than this is refused AT ADMISSION, so the bond
+    /// only ever has to cover statements the profile admits. Derived from the largest admitted key family, never a protocol constant.
+    uint256 public immutable MAX_STATEMENT;
 
     enum Status {
         None,
@@ -44,17 +47,19 @@ contract PinpointJcsAnchor {
     error NoFraud();
     error NotSubmitter();
 
-    constructor(uint256 window, uint256 bond, uint256 maxSeg) {
+    constructor(uint256 window, uint256 bond, uint256 maxSeg, uint256 maxStatement) {
         require(maxSeg > JcsTrace.MAX_STEP, "maxSeg too small");
+        require(maxStatement > 0 && maxStatement < 1 << 32, "bad maxStatement");
         WINDOW = window;
         BOND = bond;
         MAX_SEG = maxSeg;
+        MAX_STATEMENT = maxStatement;
     }
 
     /// Anchor a statement with its trace. No canonical-form check runs here.
     function anchor(bytes calldata raw, uint256[] calldata trace) external payable returns (bytes32 digest) {
         if (msg.value != BOND) revert WrongBond();
-        if (raw.length >= 1 << 32) revert TooLarge();
+        if (raw.length > MAX_STATEMENT) revert TooLarge(); // size cap: a rejection rule at admission
         digest = sha256(raw);
         (,, Status st) = _unpack(_slot[digest]);
         if (st != Status.None && st != Status.Rejected) revert AlreadyAnchored();
